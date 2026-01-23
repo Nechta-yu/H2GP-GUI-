@@ -1,0 +1,296 @@
+#Libraries:
+import os
+import platform as plfm
+import numpy as np
+import matplotlib as plt
+from matplotlib.figure import Figure
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+import matplotlib.animation as animation
+import tkinter as tk
+from tkinter import ttk
+import customtkinter as ctk
+from CTkMenuBar import *
+import serial
+
+
+#Variables
+    #TESP Vars (Sent)
+valveMode = 0
+valveCooldown = 0
+valveDuration = 0
+
+fanMode = True
+fanTemp = 0
+P = 0; I = 0; D = 0
+fanPower = 0
+
+read = False
+
+    #CESP Vars (Received)
+h2V = 0
+h2A = 0
+h2T = 0
+batV = 0
+batA = 0
+valve = False       # Is valve open?
+fanS = 0            # Fan speed
+
+
+    #Other Vars
+cespList = [[] for i in range(5)]      # List for all received CESP vars
+try:                                    # Serial port for TESP communication
+    ser = serial.Serial("/dev/ttyACM1", 115200, timeout=1)
+except serial.SerialException as e:
+    print(f"Error opening serial port: {e}")
+    exit()
+
+transmitFreq = 100                      # How often, in ms, is data transmitted?
+raceLen = 1440000                       # Length of race in ms (4hrs => 1440000, 6hrs => 2160000)
+
+
+#Functions
+def updateCESPList(type, value):
+    global h2V; global h2A; global h2T; global batV; global batA
+    if type == "h2V":
+        x=0
+    elif type == "h2A":
+        x=1
+    elif type == "h2T":
+        x=2
+    elif type == "batA":
+        x=3
+    elif type == "batV":
+        x=4
+
+    cespList[x].append(value)
+
+def recvMsg(app):       # Receive data from CESP
+    global h2V, h2A, h2T, batV, batA,x 
+
+    try:
+        if ser.in_waiting > 0:
+            data = ser.readline().decode("ascii", errors="ignore").strip()
+            if data:
+                dataList = data.split()
+                if len(dataList) >= 5:
+                    '''h2V = float(dataList[0])
+                    h2A = float(dataList[1])
+                    h2T = float(dataList[2])
+                    batV = float(dataList[3])
+                    batA = float(dataList[4])'''
+                    print(dataList)
+                else:
+                    print(f"Invalid data format: {dataList}")
+            else:
+                print("Empty line received")
+    except Exception as e:
+        print(f"Error in recvMsg: {e}")
+    app.after(100,lambda: recvMsg(app))
+
+def onClose(app):       # Proper cleanup when closing app
+    if ser.is_open:
+        ser.close()
+    app.destroy()
+
+
+#CTK GUI
+class App(ctk.CTk):
+    def __init__(self):
+        super().__init__()
+        self.title("H2GP GUI APP (Yippee)")
+        self.geometry("1500x1000+25+25")
+        self.minsize(750,500)
+        
+        self.MainTabs = MainTabs(self) 
+        recvMsg(self)
+        self.protocol("WM_DELETE_WINDOW",lambda: onClose(self))
+        self.mainloop()
+
+
+'''class Sidebar(tk.PanedWindow):
+    def __init__(self, parent):
+        super().__init__(parent,background="#242424",
+                         orient=tk.HORIZONTAL, sashwidth=5)
+        self.pack(fill="both", expand=True)
+
+        leftFrame= ctk.CTkFrame(self,)
+        rightFrame= ctk.CTkFrame(self,)
+
+        MainTabs(rightFrame).pack(expand=True, fill="both")
+
+        self.add(leftFrame, width=300)
+        self.add(rightFrame)
+        self.createSideWidgets(leftFrame)
+    
+    def createSideWidgets(self,parent):
+        TopText = ctk.CTkLabel(parent, text="Show: ")
+        checkH2Bat = ctk.CTkCheckBox(parent, text="H2FC + Battery data") # include output
+        checkH2Temp = ctk.CTkCheckBox(parent, text="H2 Temp + Fan data")
+        TopText.pack()
+        checkH2Bat.pack()
+        checkH2Temp.pack()
+
+    def switchFrame(self):
+        print(self.panes())'''
+
+
+#Main
+class MainTabs(ctk.CTkTabview):
+    def __init__(self,parent,**kwargs):
+        super().__init__(parent, **kwargs)
+        
+        self.add(" Home ")
+        self.add(" Graphs ")
+        self.add(" Settings ")
+        self.add(" Help ")
+        homeTab = self.tab(" Home ")
+        graphTab = self.tab(" Graphs ")
+        settingsTab = self.tab(" Settings ")
+        helpTab = self.tab(" Help ")
+        self.pack(expand=True, fill="both")
+        
+        self.HomeTab = HomeTab(homeTab)
+
+
+# Home Tab
+class HomeTab(ctk.CTkScrollableFrame):
+    def __init__(self,parent, **kwargs):
+        super().__init__(parent, **kwargs)
+        self.pack(expand=True, fill="both")
+        
+        for i in range(4):
+            self.rowconfigure(i,weight=1)
+        self.columnconfigure(0,weight=1)
+
+        #[UltExpandFrame(self).grid(   row=0, column=0, sticky="nesw")
+        self.H2BatExpandFrame = H2BatExpandFrame(self,parent).grid( row=1, column=0, sticky="nesw")
+        #FanExpandFrame(self).grid(   row=2, column=0, sticky="nesw")
+        #ValveExpandFrame(self).grid( row=3, column=0, sticky="nesw")
+
+
+class H2BatExpandFrame(ctk.CTkFrame):
+    open=False
+    def __init__(self,parent,app):
+        super().__init__(parent)
+
+        self.button = ctk.CTkButton(self, text="â¸",width=20,height=20,
+                                    command=lambda: self.expand())
+        self.button.place(relx=0,rely=0, anchor="nw")
+        self.frameLabel = ctk.CTkLabel(self, text="H2FC + Battery Data")
+        self.frameLabel.place(x=25,y=27,anchor="sw")
+        self.MetaFrame=ctk.CTkFrame(self, fg_color="transparent")
+        self.MetaFrame.place(x=20,y=20,relwidth=1,anchor="nw")
+        self.Frame=H2BatFrame(parent=self.MetaFrame,app=app)
+    
+    def expand(self):
+        if self.open==False:
+            self.button.configure(text="â¾")
+            self.Frame.pack(fill="x")
+            self.open=True
+        else:
+            self.button.configure(text="â¸")
+            self.Frame.pack_forget()
+            self.open=False
+    
+
+class H2BatFrame(ctk.CTkFrame): # <--- fix currentDataDisplayFrame
+
+
+    def __init__(self,parent,app):
+        super().__init__(parent, fg_color="#292929")
+
+        self.currentDataDisplayFrame = ctk.CTkFrame(self)
+        self.currentDataDisplayFrame.pack(fill="x")
+        for i in range(3):
+            self.currentDataDisplayFrame.columnconfigure(i,weight=1,uniform="a")
+        for i in range(3):
+            self.currentDataDisplayFrame.rowconfigure(i,weight=1,uniform="a")
+        
+        self.graphDisplayFrame = ctk.CTkFrame(self, fg_color="transparent")
+        
+        self.graphDisplayFrame.pack(fill="x")
+        self.graphOptions = ctk.CTkFrame(self.graphDisplayFrame, fg_color="#292929")
+        
+        self.currentDataDisplay()
+        app.after(100, self.updateDataDisplay())
+
+    def currentDataDisplay(self):
+        global h2V, h2A, h2T, batV, batA
+        
+        # FCV BV FCA TA F V
+        self.FCVtext = ctk.CTkLabel(self.currentDataDisplayFrame, text=(f"H2FC Voltage: {h2V}"))
+        self.FCVtext.grid(column=0, row=0, sticky="")
+        self.FCAtext = ctk.CTkLabel(self.currentDataDisplayFrame, text=(f"H2FC Amperage: {h2A}"))
+        self.FCAtext.grid(column=0, row=1, sticky="")
+        self.FCPtext = ctk.CTkLabel(self.currentDataDisplayFrame, text=(f"H2FC Power: {h2V*h2A}"))
+        self.FCPtext.grid(column=0, row=2, sticky="")
+        self.BVtext = ctk.CTkLabel(self.currentDataDisplayFrame, text=(f"Battery Voltage: {batV}"))
+        self.BVtext.grid(column=1, row=0, sticky="")
+        self.BAtext = ctk.CTkLabel(self.currentDataDisplayFrame, text=(f"Battery Amperage: {batA}"))
+        self.BAtext.grid(column=1, row=1, sticky="")
+        self.BPtext = ctk.CTkLabel(self.currentDataDisplayFrame, text=(f"Battery Power: {h2V*h2A}"))
+        self.BPtext.grid(column=1, row=2, sticky="")
+        self.TVtext = ctk.CTkLabel(self.currentDataDisplayFrame, text=(f"Total Voltage: {h2V+batV}"))
+        self.TVtext.grid(column=2, row=0, sticky="")
+        self.TAtext = ctk.CTkLabel(self.currentDataDisplayFrame, text=(f"Total Amperage: {h2A+batA}"))
+        self.TAtext.grid(column=2, row=1, sticky="")
+        self.TPtext = ctk.CTkLabel(self.currentDataDisplayFrame, text=(f"Total Power: {(h2V+batV)*(h2A+batA)}"))
+        self.TPtext.grid(column=2, row=2, sticky="")
+    
+    def updateDataDisplay(self):
+        self.FCVtext.configure(text=(f"H2FC Voltage: {h2V}"))
+        self.FCAtext.configure(text=(f"H2FC Amperage: {h2A}"))
+        self.FCPtext.configure(text=(f"H2FC Power: {h2V*h2A}"))
+        self.BVtext.configure(text=(f"Battery Voltage: {batV}"))
+        self.BAtext.configure(text=(f"Battery Amperage: {batA}"))
+        self.BPtext.configure(text=(f"Battery Power: {h2V*h2A}"))
+        self.TVtext.configure(text=(f"Total Voltage: {h2V+batV}"))
+        self.TAtext.configure(text=(f"Total Amperage: {h2A+batA}"))
+        self.TPtext.configure(text=(f"Total Power: {(h2V+batV)*(h2A+batA)}"))
+
+
+class GraphDisplay(ctk.CTkFrame):      # Add buttons. Also, option to select graph from past race (for comparison)
+
+    def __init__(self,parent):
+        super().__init__(parent)
+        AddGraph = ctk.CTkbutton(text="+ Add Graph", command= lambda: self.add_graph(self),
+                                 )
+        AddGraph.pack(expand=True, fill=x)
+
+    def add_graph(self):
+        Graph(self)
+
+
+class Graph(ctk.CTkFrame):
+    fig = Figure(figsize=(3,2),dpi=200)
+    ax = fig.add_subplot(111)
+
+    def __init__(self,parent):
+        super().__init__(parent)
+        
+        self.pack(before=parent)
+
+
+
+
+
+# Config Tab
+class configTab(ctk.CTkScrollableFrame):
+    def __init__(self,parent):
+        super().__init__(parent)
+        self.pack(expand=True,fill="both")
+        self.createWidgets()
+    
+    def createWidgets(self):
+        valveFrame = ctk.CTkFrame(self)
+        fanFrame = ctk.CTkFrame(self)
+        valveFrame.pack() ; fanFrame.pack()
+
+        #Valve Widgets
+
+
+
+        #Fan Widgets
+
+
+app = App()
